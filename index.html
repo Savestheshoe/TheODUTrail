@@ -33,7 +33,8 @@
         #wagon-scene {
             display: none; 
             width: 100%;
-            height: 250px; 
+            height: 250px;
+            flex-shrink: 0; /* Prevents the trail canvas from crushing */
             margin-bottom: 20px;
             background-color: #000;
             border-bottom: 2px solid #555;
@@ -57,9 +58,11 @@
             z-index: 10;
         }
 
+        /* Flex: 1 1 auto lets the image scale dynamically to protect the text */
         #image-container {
             text-align: center;
-            height: 250px;
+            flex: 1 1 auto; 
+            min-height: 0;
             margin-bottom: 20px;
             display: flex;
             justify-content: center;
@@ -68,25 +71,29 @@
         }
 
         #image-container img {
-            max-height: 100%;
-            max-width: 100%;
+            width: 100%;
+            height: 100%;
+            object-fit: contain; 
             image-rendering: pixelated;
             display: none; 
         }
 
+        /* Flex: 0 0 auto forces the text box to perfectly fit its content without scrolling */
         #text-area {
-            flex-grow: 1;
+            flex: 0 0 auto; 
             line-height: 1.6;
             font-size: 18px; 
             white-space: pre-wrap;
-            overflow-y: auto; 
             padding-right: 15px;
         }
 
+        /* Margin-top: auto anchors the input line to the absolute bottom of the window */
         .input-line {
-            margin-top: 15px;
+            margin-top: auto;
+            padding-top: 15px;
             color: #fff;
             font-size: 18px;
+            flex-shrink: 0;
         }
 
         input {
@@ -108,14 +115,17 @@
 <body>
 
     <div id="game-window">
+        <!-- Trail Canvas -->
         <div id="wagon-scene">
             <canvas id="trail-canvas" width="1200" height="250"></canvas>
         </div>
 
+        <!-- Full Screen Hunting Canvas -->
         <div id="hunt-scene">
             <canvas id="hunt-canvas" width="1272" height="842"></canvas>
         </div>
 
+        <!-- UI Elements -->
         <div id="image-container">
             <img id="scene-image" src="image_f41202.jpg" alt="Scene graphic">
         </div>
@@ -191,10 +201,8 @@
                 }
                 keys[e.code] = true;
             } else if (e.key === "Enter") {
-                // Completely block Enter spam while animating to prevent crashes
                 if (isAnimating) return; 
                 
-                // Prevent browser scrolling and force the input to process
                 e.preventDefault(); 
                 playerInput.focus();
                 
@@ -378,7 +386,6 @@
             drawWheel(wagonX + 20, baseWagonY + 25, 15); 
         }
 
-        // Hardcoded Clock Execution (Bypasses Browser Timestamp Bugs)
         function animateFrame() {
             if (!isAnimating) return;
             
@@ -386,11 +393,10 @@
             let dt = now - lastAnimTime;
             lastAnimTime = now;
             
-            // Failsafe constraint: if tab is hidden, cap the time jump so it doesn't break math
             if (dt > 100) dt = 16; 
             
             let elapsed = now - animStart;
-            let progress = Math.min(elapsed / 1000, 1.0); // Exactly 1.0 second animation duration
+            let progress = Math.min(elapsed / 1000, 1.0); 
 
             if (progress < 1.0) {
                 globalMountainOffset = (globalMountainOffset + dt * 0.15) % 450;
@@ -449,8 +455,7 @@
         function huntLoop() {
             if (!hunt.active) return;
             let now = performance.now();
-            let dt = now - hunt.lastTime;
-            hunt.lastTime = now;
+            hunt.lastTime = now; 
             
             let elapsed = now - hunt.startTime;
             let remaining = Math.max(0, 20000 - elapsed) / 1000; 
@@ -598,12 +603,24 @@
                     else if (input === "3") { state = "BUY_TOOLS"; renderBuy("Tools (EPI)", Math.floor(150 * mult)); }
                     else if (input === "4") { state = "BUY_PROG_SUPP"; renderBuy("Program Supplies", Math.floor(10 * mult)); }
                     else if (input === "5") { 
-                        if(state === "FORT_MENU") currentMilestoneIndex++; 
-                        state = "TRAIL"; 
-                        renderTrail(); 
+                        if(state === "FORT_MENU") {
+                            currentMilestoneIndex++; 
+                            state = "TRAIL"; 
+                            renderTrail(); 
+                        } else {
+                            state = "DEPARTURE_SCREEN";
+                            renderDeparture();
+                        }
                     }
                     break;
                     
+                case "DEPARTURE_SCREEN":
+                    if (input === "") {
+                        state = "TRAIL";
+                        renderTrail();
+                    }
+                    break;
+
                 case "GRANTOR_MENU":
                     if (input === "") {
                         currentMilestoneIndex++;
@@ -645,8 +662,14 @@
                     
                 case "EVENT_DISMISS":
                 case "HUNTING_OVER":
-                    state = "TRAIL";
-                    renderTrail();
+                    if (programHealth <= 0) {
+                        state = "GAME_OVER";
+                        setVisuals("IMAGE", "Tombstone.jpg");
+                        updateScreen("<span class='red'>The program failed to launch. Your team has perished on the ODU trail.</span>", "Press ENTER to restart");
+                    } else {
+                        state = "TRAIL";
+                        renderTrail();
+                    }
                     break;
                     
                 case "GAME_OVER":
@@ -661,17 +684,24 @@
         let currentItemType = "";
 
         function renderStore(name, mult) {
-            if (currentMilestoneIndex === 0 && miles === 0) {
-                setVisuals("IMAGE", "image_f41202.jpg"); 
-            } else {
-                setVisuals("WAGON"); 
+            setVisuals("NONE"); 
+            
+            let html = `<div style="display: flex; align-items: flex-start;">`;
+            
+            if (name === "Program Pre-Launch Planning") {
+                html += `<img src="EZ.png" style="height: 250px; margin-right: 40px; image-rendering: pixelated;">`;
+                name = "EZ's General Store";
             }
-            let html = `${name}\n<span class="cyan">Budget: $${budget}</span>\n\n`;
+            
+            html += `<div>`;
+            html += `${name}\n<span class="cyan">Budget: $${budget}</span>\n\n`;
             html += `1. Buy Maps (Strategic Planning)  - $${Math.floor(50*mult)}/ea  [You have: ${maps}]\n`;
             html += `2. Buy Supplies (PM/CQI)          - $${Math.floor(100*mult)}/ea [You have: ${supplies}]\n`;
             html += `3. Buy Tools (EPI)                - $${Math.floor(150*mult)}/ea [You have: ${tools}]\n`;
             html += `4. Buy Program Supplies (Rations) - $${Math.floor(10*mult)}/ea  [You have: ${programSupplies}]\n`;
             html += `5. Launch / Continue Program\n`;
+            html += `</div></div>`;
+            
             updateScreen(html, "What is your choice? ");
         }
 
@@ -706,17 +736,29 @@
                 }
             }
         }
+        
+        function renderDeparture() {
+            setVisuals("IMAGE", "Picture1.jpg");
+            let html = ``;
+            updateScreen(html, "Press ENTER to continue...");
+        }
 
         // --- Travel Mechanics ---
         function renderTrail() {
+            if (programHealth <= 0) {
+                state = "GAME_OVER";
+                setVisuals("IMAGE", "Tombstone.jpg");
+                updateScreen("<span class='red'>Program Health reached 0. The program failed to launch. Game Over.</span>", "Press ENTER to restart");
+                return;
+            }
+
             setVisuals("WAGON");
             let healthStatus = programHealth > 70 ? "Good" : programHealth > 40 ? "Fair" : "Poor";
-            
-            // Failsafe
             let nextStop = trailMap[currentMilestoneIndex];
+            
             if (!nextStop) {
                 state = "GAME_OVER";
-                setVisuals("IMAGE", "image_cc0a39.png");
+                setVisuals("IMAGE", "Tombstone.jpg");
                 updateScreen("<span class='highlight'>You have cleared the known path! Game Over.</span>", "Press ENTER to restart");
                 return;
             }
@@ -724,7 +766,7 @@
             let html = `Timeline: ${month}, Day ${date} (3 Month Cycle)\n`;
             html += `Environment: <span class="cyan">Stable</span>\n`;
             html += `Program Health: ${healthStatus} (${programHealth}%)\n`;
-            html += `Prog. Supplies: ${programSupplies} | Tools: ${tools} | PM/CQI: ${supplies} | Maps: ${maps}\n\n`;
+            html += `Budget: <span class="green">$${budget}</span> | Prog. Supplies: ${programSupplies} | Tools: ${tools} | PM/CQI: ${supplies} | Maps: ${maps}\n\n`;
             html += `Next Milestone: ${nextStop.name} (${nextStop.distance - miles} miles)\n`;
             html += `Total Miles traveled: ${miles} miles\n\n`;
             html += `Press <span class="highlight">ENTER</span> to continue traveling the trail (20 miles)\n`;
@@ -733,36 +775,44 @@
         }
 
         function startTravel() {
+            let starving = false;
             if (programSupplies > 0) {
                 programSupplies--;
             } else {
-                programHealth -= 15;
-                state = "EVENT_DISMISS";
-                setVisuals("IMAGE", "image_cc0a39.png");
-                eventLog.push("Ran out of program supplies (-15 Health).");
-                updateScreen("\n\n\n\n     <span class='red'>You are out of Program Supplies! Progress halts, and the team is exhausted. (Lose 15 Health)</span>", "Press ENTER to continue...");
-                return;
+                programHealth -= 5;
+                starving = true;
+                eventLog.push("Traveled without supplies (-5 Health).");
             }
 
             miles += 20;
             advanceTime(Math.floor(Math.random() * 3) + 1);
             
-            isAnimating = true;
             animStart = performance.now(); 
             lastAnimTime = animStart;
+            isAnimating = true;
             
             state = "ANIMATING";
-            updateScreen("Traveling the trail...", ""); 
+            if (starving) {
+                updateScreen("Traveling without supplies... (Health -5)", ""); 
+            } else {
+                updateScreen("Traveling the trail...", ""); 
+            }
             requestAnimationFrame(animateFrame);
         }
 
         function resolveTravel() {
+            if (programHealth <= 0) {
+                state = "GAME_OVER";
+                setVisuals("IMAGE", "Tombstone.jpg");
+                updateScreen("<span class='red'>Your team succumbed to exhaustion. The program failed to launch. Game Over.</span>", "Press ENTER to restart");
+                return;
+            }
+
             let nextStop = trailMap[currentMilestoneIndex];
 
-            // Deep Failsafe check
             if (!nextStop) {
                 state = "GAME_OVER";
-                setVisuals("IMAGE", "image_cc0a39.png");
+                setVisuals("IMAGE", "Tombstone.jpg");
                 updateScreen("<span class='highlight'>You have fully navigated the program scope! Game Over.</span>", "Press ENTER to restart");
                 return;
             }
@@ -791,9 +841,9 @@
                         eventLog.push("Got lost, but used a Map to recover.");
                         triggerEvent("<span class='green'>Your team took a wrong turn, but your Strategic Planning (Map) got you back on track without losing time or supplies!</span>", "image_cc09ff.jpg");
                     } else {
-                        programSupplies = Math.max(0, programSupplies - 2);
-                        eventLog.push("Got lost without a Map (-2 Supplies).");
-                        triggerEvent("<span class='red'>You got lost and wandered off-scope! Without a Map, you wasted 2 extra Program Supplies finding your way back.</span>", "image_cc0a39.png");
+                        programHealth -= 5;
+                        eventLog.push("Got lost without a Map (-5 Health).");
+                        triggerEvent("<span class='red'>You got lost and wandered off-scope! Without a Map, your team wasted valuable time finding their way back. (Lose 5 Health)</span>", "image_cc0a39.png");
                     }
                     return;
                 } else if (eventChance < 0.5) {
@@ -809,7 +859,7 @@
 
             if (programHealth <= 0) {
                 state = "GAME_OVER";
-                setVisuals("IMAGE", "image_cc0a39.png");
+                setVisuals("IMAGE", "Tombstone.jpg");
                 updateScreen("<span class='red'>The program failed to launch. Your team has perished on the ODU trail.</span>", "Press ENTER to restart");
                 return;
             }
@@ -1097,7 +1147,7 @@
             
             if (programHealth <= 0) {
                 state = "GAME_OVER";
-                setVisuals("IMAGE", "image_cc0a39.png");
+                setVisuals("IMAGE", "Tombstone.jpg");
                 updateScreen(successMessage + "\n\n<span class='red'>The program has collapsed. Game Over.</span>", "Press ENTER to restart...");
             } else {
                 state = "EVENT_DISMISS";
