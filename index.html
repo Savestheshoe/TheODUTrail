@@ -1,0 +1,1132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The ODU Trail</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+        
+        body {
+            background-color: #111;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+
+        #game-window {
+            background-color: black;
+            color: white;
+            font-family: 'Press Start 2P', monospace;
+            width: 1280px;
+            height: 850px;
+            padding: 30px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            border: 4px solid #fff;
+            position: relative; 
+        }
+
+        #wagon-scene {
+            display: none; 
+            width: 100%;
+            height: 250px; 
+            margin-bottom: 20px;
+            background-color: #000;
+            border-bottom: 2px solid #555;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            image-rendering: pixelated; 
+        }
+
+        #hunt-scene {
+            display: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #1a4a1a;
+            z-index: 10;
+        }
+
+        #image-container {
+            text-align: center;
+            height: 250px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #000;
+        }
+
+        #image-container img {
+            max-height: 100%;
+            max-width: 100%;
+            image-rendering: pixelated;
+            display: none; 
+        }
+
+        #text-area {
+            flex-grow: 1;
+            line-height: 1.6;
+            font-size: 18px; 
+            white-space: pre-wrap;
+            overflow-y: auto; 
+            padding-right: 15px;
+        }
+
+        .input-line {
+            margin-top: 15px;
+            color: #fff;
+            font-size: 18px;
+        }
+
+        input {
+            background: black;
+            color: #fff;
+            border: none;
+            font-family: 'Press Start 2P', monospace;
+            font-size: 18px;
+            width: 150px;
+            outline: none;
+        }
+        
+        .highlight { color: #ff9900; }
+        .cyan { color: #33ccff; }
+        .green { color: #00ff00; }
+        .red { color: #ff3333; }
+    </style>
+</head>
+<body>
+
+    <div id="game-window">
+        <div id="wagon-scene">
+            <canvas id="trail-canvas" width="1200" height="250"></canvas>
+        </div>
+
+        <div id="hunt-scene">
+            <canvas id="hunt-canvas" width="1272" height="842"></canvas>
+        </div>
+
+        <div id="image-container">
+            <img id="scene-image" src="image_f41202.jpg" alt="Scene graphic">
+        </div>
+        <div id="text-area"></div>
+        <div class="input-line" id="input-container">
+            <span id="prompt-text">What is your choice? </span>
+            <input type="text" id="player-input" autocomplete="off" autofocus>
+        </div>
+    </div>
+
+    <script>
+        // --- Game Data & State ---
+        let state = "TITLE";
+        let budget = 1500;
+        let maps = 0;      
+        let supplies = 0;  
+        let tools = 0;     
+        let programSupplies = 0; 
+        
+        let programHealth = 100;
+        let month = "Month 1"; 
+        let date = 1;
+        let miles = 0;
+        
+        let oduServicesUsed = 0;
+        let eventLog = [];
+        
+        let trailMap = [
+            { type: 'river', name: 'Data River', distance: 60 },
+            { type: 'fork', name: 'Fork in the Road', distance: 120 }
+        ];
+        let currentMilestoneIndex = 0;
+        
+        // Fork 1 variables
+        let daysRevealed = false;
+        let destRevealed = false;
+        let prefRevealed = false;
+
+        // Fork 2 variables
+        let f2DaysRevealed = false;
+        let f2DestRevealed = false;
+        let f2PrefRevealed = false;
+
+        // River variables
+        let currentRiverDepth = 0;
+        let currentRiverWidth = 0;
+        let riverDataRevealed = false;
+        let altRouteRevealed = false;
+
+        // --- DOM Elements ---
+        const textArea = document.getElementById("text-area");
+        const playerInput = document.getElementById("player-input");
+        const promptText = document.getElementById("prompt-text");
+        const sceneImage = document.getElementById("scene-image");
+        const wagonScene = document.getElementById("wagon-scene");
+        const imageContainer = document.getElementById("image-container");
+        const inputContainer = document.getElementById("input-container");
+        
+        const canvas = document.getElementById('trail-canvas');
+        const ctx = canvas.getContext('2d');
+
+        const huntScene = document.getElementById("hunt-scene");
+        const hCanvas = document.getElementById("hunt-canvas");
+        const hCtx = hCanvas.getContext('2d');
+
+        // --- Bulletproof Global Key Listener ---
+        const keys = {};
+        
+        window.addEventListener('keydown', (e) => {
+            if (state === "HUNTING") {
+                if (e.code === 'Space' || e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+                    e.preventDefault(); 
+                }
+                keys[e.code] = true;
+            } else if (e.key === "Enter") {
+                // Completely block Enter spam while animating to prevent crashes
+                if (isAnimating) return; 
+                
+                // Prevent browser scrolling and force the input to process
+                e.preventDefault(); 
+                playerInput.focus();
+                
+                let val = playerInput.value.trim().toLowerCase();
+                playerInput.value = "";
+                processInput(val);
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (state === "HUNTING") {
+                keys[e.code] = false;
+            }
+        });
+
+        // --- Visual Controllers ---
+        function setVisuals(mode, src = null) {
+            wagonScene.style.display = "none";
+            imageContainer.style.display = "none";
+            huntScene.style.display = "none";
+
+            if (mode === "WAGON") {
+                wagonScene.style.display = "block";
+                drawTrailScene(1.0); 
+            } else if (mode === "HUNTING") {
+                huntScene.style.display = "block";
+            } else if (mode === "IMAGE" && src) {
+                imageContainer.style.display = "flex";
+                sceneImage.src = src;
+                sceneImage.style.display = "block";
+            }
+        }
+
+        function updateScreen(text, prompt = "What is your choice? ") {
+            textArea.innerHTML = text;
+            promptText.innerText = prompt;
+        }
+
+        function advanceTime(days) {
+            date += days;
+            while (date > 30) {
+                date -= 30;
+                if (month === "Month 1") month = "Month 2";
+                else if (month === "Month 2") month = "Month 3";
+                else if (month === "Month 3") month = "Month 4";
+                else month = "Post-Evaluation";
+            }
+        }
+
+        // --- Travel Canvas Animation (Performance.now Hardcoded) ---
+        let animStart = 0;
+        let lastAnimTime = 0;
+        let isAnimating = false;
+        let globalMountainOffset = 0;
+        let globalGroundOffset = 0;
+        let globalWheelAngle = 0;
+
+        function drawTrailScene(progress = 1.0) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Sky & Mountains 
+            ctx.fillStyle = "#aa00aa";
+            for (let i = 0; i < 6; i++) {
+                let xStart = (i * 450) - globalMountainOffset;
+                ctx.beginPath();
+                ctx.moveTo(xStart, 200);
+                ctx.lineTo(xStart + 100, 80);
+                ctx.lineTo(xStart + 150, 120);
+                ctx.lineTo(xStart + 225, 40);
+                ctx.lineTo(xStart + 350, 200);
+                ctx.fill();
+            }
+
+            // Ground
+            ctx.fillStyle = "#ff5500";
+            ctx.fillRect(0, 200, canvas.width, 50);
+            ctx.fillStyle = "#000000";
+            for (let i = -2; i < 15; i++) {
+                let x = (i * 120) - globalGroundOffset;
+                ctx.fillRect(x + 40, 210, 8, 4);
+                ctx.fillRect(x + 80, 225, 12, 4);
+            }
+
+            // Landmarks
+            let wagonX = 300; 
+            let pixelsPerMile = 900 / 40; 
+            
+            let simulatedMiles = miles;
+            if (isAnimating) {
+                simulatedMiles = (miles - 20) + (progress * 20); 
+            }
+
+            if (trailMap[currentMilestoneIndex]) {
+                trailMap.forEach(landmark => {
+                    let dist = landmark.distance - simulatedMiles;
+                    if (dist >= -40 && dist <= 50) {
+                        let targetX = wagonX + (dist * pixelsPerMile);
+                        
+                        if (landmark.type === 'fort' || landmark.type === 'grantor') {
+                            ctx.fillStyle = landmark.type === 'grantor' ? "#FFD700" : "#8B4513"; 
+                            ctx.fillRect(targetX, 130, 120, 70);
+                            ctx.fillStyle = "#000"; 
+                            ctx.fillRect(targetX + 40, 160, 40, 40);
+                            ctx.fillStyle = "#fff";
+                            ctx.font = "12px 'Press Start 2P'";
+                            ctx.fillText(landmark.name, targetX, 120);
+                        } else if (landmark.type === 'river') {
+                            ctx.fillStyle = "#0000ff"; 
+                            ctx.fillRect(targetX, 200, 300, 50);
+                            ctx.fillStyle = "#fff";
+                            ctx.font = "12px 'Press Start 2P'";
+                            ctx.fillText(landmark.name, targetX, 190);
+                        } else if (landmark.type === 'fork' || landmark.type === 'fork2') {
+                            ctx.fillStyle = "#555"; 
+                            ctx.fillRect(targetX + 20, 140, 10, 60);
+                            ctx.fillStyle = "#fff";
+                            ctx.fillRect(targetX - 10, 150, 70, 20);
+                            ctx.fillStyle = "#000";
+                            ctx.font = "10px 'Press Start 2P'";
+                            ctx.fillText("FORK", targetX + 5, 165);
+                        } else if (landmark.type === 'audit') {
+                            ctx.fillStyle = "#777"; 
+                            ctx.fillRect(targetX, 100, 100, 100);
+                            ctx.fillStyle = "#fff";
+                            ctx.font = "10px 'Press Start 2P'";
+                            ctx.fillText("AUDIT HQ", targetX + 5, 150);
+                        } else if (landmark.type === 'evaluation') {
+                            ctx.fillStyle = "#0000ff"; 
+                            ctx.fillRect(targetX + 60, 200, 150, 50);
+                            ctx.fillStyle = "#00aa00"; 
+                            ctx.fillRect(targetX, 150, 30, 50);
+                            ctx.fillRect(targetX + 40, 130, 40, 70);
+                            ctx.fillStyle = "#fff";
+                            ctx.font = "12px 'Press Start 2P'";
+                            ctx.fillText("EVALUATION", targetX, 110);
+                        }
+                    }
+                });
+            }
+
+            // Wagon
+            let oxBounce = isAnimating ? Math.sin(globalWheelAngle * 2) * 2 : 0;
+            let wagonBounce = isAnimating ? Math.cos(globalWheelAngle * 1.5) * 1.5 : 0;
+            let baseWagonY = 170;
+
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(wagonX + 80, baseWagonY + 5 + oxBounce, 40, 20); 
+            ctx.fillRect(wagonX + 115, baseWagonY - 5 + oxBounce, 15, 15); 
+            ctx.fillStyle = "#ff0000"; 
+            ctx.fillRect(wagonX + 90, baseWagonY + oxBounce, 5, 10); 
+            ctx.fillStyle = "#ffffff";
+            let legOffset = isAnimating && Math.sin(globalWheelAngle * 3) > 0 ? 5 : -5;
+            if(!isAnimating) legOffset = 0;
+            ctx.fillRect(wagonX + 85 + legOffset, baseWagonY + 25, 4, 10);
+            ctx.fillRect(wagonX + 110 - legOffset, baseWagonY + 25, 4, 10);
+
+            ctx.fillStyle = "#ffffff";
+            ctx.beginPath();
+            ctx.arc(wagonX - 10, baseWagonY + wagonBounce, 45, Math.PI, 0);
+            ctx.fill();
+            ctx.fillStyle = "#ff9900";
+            ctx.fillRect(wagonX - 60, baseWagonY + wagonBounce, 100, 25);
+            ctx.fillRect(wagonX + 40, baseWagonY + 15 + wagonBounce, 40, 4);
+
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth = 3;
+            function drawWheel(cx, cy, radius) {
+                ctx.beginPath();
+                ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(cx + Math.cos(globalWheelAngle) * radius, cy + Math.sin(globalWheelAngle) * radius);
+                ctx.lineTo(cx - Math.cos(globalWheelAngle) * radius, cy - Math.sin(globalWheelAngle) * radius);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(cx + Math.cos(globalWheelAngle + Math.PI/2) * radius, cy + Math.sin(globalWheelAngle + Math.PI/2) * radius);
+                ctx.lineTo(cx - Math.cos(globalWheelAngle + Math.PI/2) * radius, cy - Math.sin(globalWheelAngle + Math.PI/2) * radius);
+                ctx.stroke();
+            }
+            drawWheel(wagonX - 40, baseWagonY + 25, 15); 
+            drawWheel(wagonX + 20, baseWagonY + 25, 15); 
+        }
+
+        // Hardcoded Clock Execution (Bypasses Browser Timestamp Bugs)
+        function animateFrame() {
+            if (!isAnimating) return;
+            
+            let now = performance.now();
+            let dt = now - lastAnimTime;
+            lastAnimTime = now;
+            
+            // Failsafe constraint: if tab is hidden, cap the time jump so it doesn't break math
+            if (dt > 100) dt = 16; 
+            
+            let elapsed = now - animStart;
+            let progress = Math.min(elapsed / 1000, 1.0); // Exactly 1.0 second animation duration
+
+            if (progress < 1.0) {
+                globalMountainOffset = (globalMountainOffset + dt * 0.15) % 450;
+                globalGroundOffset = (globalGroundOffset + dt * 0.6) % 120;
+                globalWheelAngle += dt * 0.01;
+                
+                drawTrailScene(progress); 
+                requestAnimationFrame(animateFrame);
+            } else {
+                drawTrailScene(1.0);
+                isAnimating = false;
+                resolveTravel();
+            }
+        }
+
+        // --- Hunting Mini-Game Logic ---
+        let hunt = {
+            active: false,
+            startTime: 0,
+            lastTime: 0,
+            player: { x: 636, y: 421, angle: -Math.PI/2, cooldown: 0 }, 
+            bullets: [],
+            grantors: [],
+            moneyCaught: 0
+        };
+
+        const pitchPhrases = ["Hello!", "Nice to meet you!", "Good to see you!", "Let's connect!", "Great point!"];
+
+        function startHunting() {
+            if (programSupplies < 1) {
+                updateScreen(`\n\n\n\n     <span class='red'>You need at least 1 Program Supply (Ration) to spend a day networking and pitching to grantors!</span>`, "Press ENTER to return to menu...");
+                state = "EVENT_DISMISS";
+                return;
+            }
+            programSupplies--;
+            advanceTime(1);
+            
+            state = "HUNTING";
+            hunt.active = true;
+            hunt.startTime = performance.now();
+            hunt.lastTime = hunt.startTime;
+            hunt.bullets = [];
+            hunt.grantors = [];
+            hunt.moneyCaught = 0;
+            hunt.player.x = hCanvas.width / 2;
+            hunt.player.y = hCanvas.height / 2;
+            hunt.player.angle = -Math.PI / 2; 
+            hunt.player.cooldown = 0;
+            
+            inputContainer.style.display = 'none';
+            setVisuals("HUNTING");
+            
+            requestAnimationFrame(huntLoop);
+        }
+
+        function huntLoop() {
+            if (!hunt.active) return;
+            let now = performance.now();
+            let dt = now - hunt.lastTime;
+            hunt.lastTime = now;
+            
+            let elapsed = now - hunt.startTime;
+            let remaining = Math.max(0, 20000 - elapsed) / 1000; 
+            
+            if (remaining <= 0) {
+                endHunting();
+                return;
+            }
+            
+            // Player Controls
+            if (keys['ArrowLeft']) hunt.player.angle -= 0.05;
+            if (keys['ArrowRight']) hunt.player.angle += 0.05;
+            
+            if (keys['Space'] && hunt.player.cooldown <= 0) {
+                hunt.bullets.push({
+                    x: hunt.player.x,
+                    y: hunt.player.y,
+                    vx: Math.cos(hunt.player.angle) * 7, 
+                    vy: Math.sin(hunt.player.angle) * 7,
+                    text: pitchPhrases[Math.floor(Math.random() * pitchPhrases.length)]
+                });
+                hunt.player.cooldown = 35; 
+            }
+            if (hunt.player.cooldown > 0) hunt.player.cooldown--;
+            
+            // Spawning Grantors 
+            if (Math.random() < 0.015) {
+                let types = [
+                    { speed: 1.5, size: 24, value: 10, color: '#00ff00' }, 
+                    { speed: 3.5, size: 18, value: 25, color: '#0088ff' }, 
+                    { speed: 6.0, size: 12, value: 50, color: '#ffd700' }  
+                ];
+                let type = types[Math.floor(Math.random() * types.length)];
+                
+                let dir = Math.random() < 0.5 ? 1 : -1;
+                let gx = dir === 1 ? -30 : hCanvas.width + 30;
+                let gy = Math.random() * (hCanvas.height - 100) + 50; 
+                let gvx = dir * type.speed;
+                let gvy = (Math.random() - 0.5) * 0.5; 
+                
+                hunt.grantors.push({ x: gx, y: gy, vx: gvx, vy: gvy, ...type });
+            }
+            
+            // Clear & Draw Background
+            hCtx.fillStyle = '#1a4a1a'; 
+            hCtx.fillRect(0,0, hCanvas.width, hCanvas.height);
+            
+            // Update & Draw Bullets (Words)
+            hCtx.fillStyle = '#fff';
+            hCtx.font = "14px 'Press Start 2P'";
+            for (let i = hunt.bullets.length - 1; i >= 0; i--) {
+                let b = hunt.bullets[i];
+                b.x += b.vx;
+                b.y += b.vy;
+                
+                hCtx.fillText(b.text, b.x, b.y); 
+                
+                if (b.x < -100 || b.x > hCanvas.width + 100 || b.y < -50 || b.y > hCanvas.height + 50) {
+                    hunt.bullets.splice(i, 1);
+                }
+            }
+            
+            // Update & Draw Grantors
+            for (let i = hunt.grantors.length - 1; i >= 0; i--) {
+                let g = hunt.grantors[i];
+                g.x += g.vx;
+                g.y += g.vy;
+                
+                hCtx.fillStyle = g.color;
+                hCtx.fillRect(g.x - g.size/2, g.y - g.size/2, g.size, g.size);
+                
+                // Collision Detection
+                let hit = false;
+                for (let j = hunt.bullets.length - 1; j >= 0; j--) {
+                    let b = hunt.bullets[j];
+                    let dx = b.x - g.x;
+                    let dy = b.y - g.y;
+                    if (dx*dx + dy*dy < (g.size/2 + 20) * (g.size/2 + 20)) {
+                        hunt.moneyCaught += g.value;
+                        hunt.bullets.splice(j, 1);
+                        hit = true;
+                        break;
+                    }
+                }
+                
+                if (hit) {
+                    hunt.grantors.splice(i, 1);
+                } else if (g.x < -100 || g.x > hCanvas.width + 100 || g.y < -100 || g.y > hCanvas.height + 100) {
+                    hunt.grantors.splice(i, 1);
+                }
+            }
+            
+            // Draw Player (Negotiator) in Center
+            hCtx.save();
+            hCtx.translate(hunt.player.x, hunt.player.y);
+            hCtx.rotate(hunt.player.angle);
+            hCtx.fillStyle = '#ffffff';
+            hCtx.beginPath();
+            hCtx.arc(0, 0, 16, 0, Math.PI * 2);
+            hCtx.fill();
+            hCtx.fillStyle = '#ff0000'; 
+            hCtx.fillRect(0, -4, 25, 8);
+            hCtx.restore();
+            
+            // Draw HUD
+            hCtx.fillStyle = '#fff';
+            hCtx.font = "18px 'Press Start 2P'";
+            hCtx.fillText(`Time: ${Math.ceil(remaining)}`, 20, 40);
+            hCtx.fillText(`Grants: $${hunt.moneyCaught}`, hCanvas.width - 250, 40);
+            
+            hCtx.font = "12px 'Press Start 2P'";
+            hCtx.fillStyle = '#aaa';
+            hCtx.fillText("Use ARROWS to aim, SPACEBAR to pitch", hCanvas.width/2 - 180, 40);
+            
+            requestAnimationFrame(huntLoop);
+        }
+
+        function endHunting() {
+            hunt.active = false;
+            budget += hunt.moneyCaught;
+            if (hunt.moneyCaught > 0) eventLog.push(`Pitched to grantors, gained $${hunt.moneyCaught}.`);
+            
+            state = "HUNTING_OVER";
+            inputContainer.style.display = 'block'; 
+            setVisuals("NONE");
+            updateScreen(`\n\n\n\n     <span class="highlight">Pitching Complete!</span>\n\n     You successfully secured $${hunt.moneyCaught} in grants!\n\n     Current Budget: $${budget}`, "Press ENTER to return to the trail...");
+        }
+
+
+        // --- Core Text Logic ---
+        function processInput(input) {
+            if (isAnimating || hunt.active) return; 
+
+            switch(state) {
+                case "TITLE":
+                    state = "STORE_MENU";
+                    renderStore("Program Pre-Launch Planning", 1.0);
+                    break;
+
+                case "STORE_MENU":
+                case "FORT_MENU":
+                    let mult = state === "STORE_MENU" ? 1.0 : (trailMap[currentMilestoneIndex]?.priceMult || 1.5);
+                    if (input === "1") { state = "BUY_MAPS"; renderBuy("Maps (Strategic Planning)", Math.floor(50 * mult)); }
+                    else if (input === "2") { state = "BUY_SUPPLIES"; renderBuy("Supplies (PM/CQI)", Math.floor(100 * mult)); }
+                    else if (input === "3") { state = "BUY_TOOLS"; renderBuy("Tools (EPI)", Math.floor(150 * mult)); }
+                    else if (input === "4") { state = "BUY_PROG_SUPP"; renderBuy("Program Supplies", Math.floor(10 * mult)); }
+                    else if (input === "5") { 
+                        if(state === "FORT_MENU") currentMilestoneIndex++; 
+                        state = "TRAIL"; 
+                        renderTrail(); 
+                    }
+                    break;
+                    
+                case "GRANTOR_MENU":
+                    if (input === "") {
+                        currentMilestoneIndex++;
+                        state = "TRAIL";
+                        renderTrail();
+                    }
+                    break;
+
+                case "FORK_MENU":
+                    handleForkMenu(input);
+                    break;
+                    
+                case "FORK2_MENU":
+                    handleFork2Menu(input);
+                    break;
+
+                case "AUDIT_MENU":
+                    handleAuditMenu(input);
+                    break;
+
+                case "BUY_MAPS": buyItem(input, "maps"); break;
+                case "BUY_SUPPLIES": buyItem(input, "supplies"); break;
+                case "BUY_TOOLS": buyItem(input, "tools"); break;
+                case "BUY_PROG_SUPP": buyItem(input, "programSupplies"); break;
+
+                case "TRAIL":
+                    if (input === "5") {
+                        startHunting();
+                    } else if (input === "") {
+                        startTravel();
+                    } else {
+                        renderTrail();
+                    }
+                    break;
+                
+                case "RIVER_CROSSING":
+                    handleRiverCrossing(input);
+                    break;
+                    
+                case "EVENT_DISMISS":
+                case "HUNTING_OVER":
+                    state = "TRAIL";
+                    renderTrail();
+                    break;
+                    
+                case "GAME_OVER":
+                case "EVALUATION":
+                    if (input === "") location.reload();
+                    break;
+            }
+        }
+
+        // --- Store Mechanics ---
+        let currentItemCost = 0;
+        let currentItemType = "";
+
+        function renderStore(name, mult) {
+            if (currentMilestoneIndex === 0 && miles === 0) {
+                setVisuals("IMAGE", "image_f41202.jpg"); 
+            } else {
+                setVisuals("WAGON"); 
+            }
+            let html = `${name}\n<span class="cyan">Budget: $${budget}</span>\n\n`;
+            html += `1. Buy Maps (Strategic Planning)  - $${Math.floor(50*mult)}/ea  [You have: ${maps}]\n`;
+            html += `2. Buy Supplies (PM/CQI)          - $${Math.floor(100*mult)}/ea [You have: ${supplies}]\n`;
+            html += `3. Buy Tools (EPI)                - $${Math.floor(150*mult)}/ea [You have: ${tools}]\n`;
+            html += `4. Buy Program Supplies (Rations) - $${Math.floor(10*mult)}/ea  [You have: ${programSupplies}]\n`;
+            html += `5. Launch / Continue Program\n`;
+            updateScreen(html, "What is your choice? ");
+        }
+
+        function renderBuy(itemName, cost) {
+            currentItemCost = cost;
+            currentItemType = itemName;
+            updateScreen(`How many ${itemName} do you want to buy at $${cost} each?\n\n(Enter a number)`, `Amount: `);
+        }
+
+        function buyItem(qtyStr, itemVar) {
+            let qty = parseInt(qtyStr);
+            if (!isNaN(qty) && qty > 0) {
+                let totalCost = qty * currentItemCost;
+                if (budget >= totalCost) {
+                    budget -= totalCost;
+                    if (itemVar === "maps") maps += qty;
+                    if (itemVar === "supplies") supplies += qty;
+                    if (itemVar === "tools") tools += qty;
+                    if (itemVar === "programSupplies") programSupplies += qty;
+                } else {
+                    alert("Not enough funds in the program budget!");
+                }
+            }
+            
+            if (state.startsWith("BUY_")) {
+                if (currentMilestoneIndex === 0 && miles === 0) {
+                    state = "STORE_MENU";
+                    renderStore("Program Pre-Launch Planning", 1.0);
+                } else {
+                    state = "FORT_MENU";
+                    renderStore(trailMap[currentMilestoneIndex].name, trailMap[currentMilestoneIndex].priceMult);
+                }
+            }
+        }
+
+        // --- Travel Mechanics ---
+        function renderTrail() {
+            setVisuals("WAGON");
+            let healthStatus = programHealth > 70 ? "Good" : programHealth > 40 ? "Fair" : "Poor";
+            
+            // Failsafe
+            let nextStop = trailMap[currentMilestoneIndex];
+            if (!nextStop) {
+                state = "GAME_OVER";
+                setVisuals("IMAGE", "image_cc0a39.png");
+                updateScreen("<span class='highlight'>You have cleared the known path! Game Over.</span>", "Press ENTER to restart");
+                return;
+            }
+            
+            let html = `Timeline: ${month}, Day ${date} (3 Month Cycle)\n`;
+            html += `Environment: <span class="cyan">Stable</span>\n`;
+            html += `Program Health: ${healthStatus} (${programHealth}%)\n`;
+            html += `Prog. Supplies: ${programSupplies} | Tools: ${tools} | PM/CQI: ${supplies} | Maps: ${maps}\n\n`;
+            html += `Next Milestone: ${nextStop.name} (${nextStop.distance - miles} miles)\n`;
+            html += `Total Miles traveled: ${miles} miles\n\n`;
+            html += `Press <span class="highlight">ENTER</span> to continue traveling the trail (20 miles)\n`;
+            html += `Enter <span class="highlight">5</span> to Pitch to Grantors (Cost: 1 Ration, 1 Day)`;
+            updateScreen(html, "What is your choice? ");
+        }
+
+        function startTravel() {
+            if (programSupplies > 0) {
+                programSupplies--;
+            } else {
+                programHealth -= 15;
+                state = "EVENT_DISMISS";
+                setVisuals("IMAGE", "image_cc0a39.png");
+                eventLog.push("Ran out of program supplies (-15 Health).");
+                updateScreen("\n\n\n\n     <span class='red'>You are out of Program Supplies! Progress halts, and the team is exhausted. (Lose 15 Health)</span>", "Press ENTER to continue...");
+                return;
+            }
+
+            miles += 20;
+            advanceTime(Math.floor(Math.random() * 3) + 1);
+            
+            isAnimating = true;
+            animStart = performance.now(); 
+            lastAnimTime = animStart;
+            
+            state = "ANIMATING";
+            updateScreen("Traveling the trail...", ""); 
+            requestAnimationFrame(animateFrame);
+        }
+
+        function resolveTravel() {
+            let nextStop = trailMap[currentMilestoneIndex];
+
+            // Deep Failsafe check
+            if (!nextStop) {
+                state = "GAME_OVER";
+                setVisuals("IMAGE", "image_cc0a39.png");
+                updateScreen("<span class='highlight'>You have fully navigated the program scope! Game Over.</span>", "Press ENTER to restart");
+                return;
+            }
+
+            // Random Events
+            if (miles < nextStop.distance) {
+                let eventChance = Math.random();
+                
+                if (eventChance < 0.1) {
+                    eventLog.push("Staff turnover (-10 Health).");
+                    triggerEvent("<span class='red'>Staff turnover delays rollout. (Lose 10 Program Health)</span>", "image_cc0a39.png");
+                    programHealth -= 10;
+                    return;
+                } else if (eventChance < 0.2) {
+                    eventLog.push("Scope creep (-20 Health).");
+                    triggerEvent("<span class='red'>Scope creep! Dysentery of the project plan! (Lose 20 Program Health)</span>", "image_cc0a39.png");
+                    programHealth -= 20;
+                    return;
+                } else if (eventChance < 0.3) {
+                    eventLog.push("Stakeholder dispute (-15 Health).");
+                    triggerEvent("<span class='red'>A major stakeholder disputes the program metrics. Time is lost smoothing things over! (Lose 15 Program Health)</span>", "image_cc0a39.png");
+                    programHealth -= 15;
+                    return;
+                } else if (eventChance < 0.4) {
+                    if (maps > 0) {
+                        eventLog.push("Got lost, but used a Map to recover.");
+                        triggerEvent("<span class='green'>Your team took a wrong turn, but your Strategic Planning (Map) got you back on track without losing time or supplies!</span>", "image_cc09ff.jpg");
+                    } else {
+                        programSupplies = Math.max(0, programSupplies - 2);
+                        eventLog.push("Got lost without a Map (-2 Supplies).");
+                        triggerEvent("<span class='red'>You got lost and wandered off-scope! Without a Map, you wasted 2 extra Program Supplies finding your way back.</span>", "image_cc0a39.png");
+                    }
+                    return;
+                } else if (eventChance < 0.5) {
+                    eventLog.push("Community Engagement (+15 Health, +1 PM/CQI).");
+                    programHealth = Math.min(100, programHealth + 15);
+                    supplies += 1;
+                    state = "EVENT_DISMISS";
+                    setVisuals("WAGON");
+                    updateScreen(`\n\n\n\n     <span class='green'>You gathered feedback from those you serve (Community Engagement)! This helps greatly structure the program. (+15 Health, +1 PM/CQI Supply)</span>`, "Press ENTER to continue...");
+                    return;
+                }
+            }
+
+            if (programHealth <= 0) {
+                state = "GAME_OVER";
+                setVisuals("IMAGE", "image_cc0a39.png");
+                updateScreen("<span class='red'>The program failed to launch. Your team has perished on the ODU trail.</span>", "Press ENTER to restart");
+                return;
+            }
+
+            // Arrive at Milestone
+            if (miles >= nextStop.distance) {
+                if (nextStop.type === 'river') {
+                    state = "RIVER_CROSSING";
+                    riverDataRevealed = false;
+                    altRouteRevealed = false;
+                    currentRiverDepth = (Math.random() * 10 + 1).toFixed(1); 
+                    currentRiverWidth = Math.floor(Math.random() * 300 + 100); 
+                    renderRiver(nextStop.name);
+                } else if (nextStop.type === 'fort') {
+                    state = "FORT_MENU";
+                    renderStore(nextStop.name, nextStop.priceMult);
+                } else if (nextStop.type === 'grantor') {
+                    state = "GRANTOR_MENU";
+                    let bonus = Math.floor(programHealth * 5); 
+                    budget += bonus;
+                    setVisuals("WAGON");
+                    eventLog.push(`Grantor reward ($${bonus}).`);
+                    updateScreen(`You have arrived at the ${nextStop.name}.\n\nBased on your program's health (${programHealth}%), the grantors are highly impressed with your progress!\n\n<span class="green">They have awarded you an additional $${bonus} in funding.</span>\n\nCurrent Budget: $${budget}`, "Press ENTER to continue the journey...");
+                } else if (nextStop.type === 'fork') {
+                    state = "FORK_MENU";
+                    renderForkMenu();
+                } else if (nextStop.type === 'fork2') {
+                    state = "FORK2_MENU";
+                    renderFork2Menu();
+                } else if (nextStop.type === 'audit') {
+                    state = "AUDIT_MENU";
+                    renderAuditMenu();
+                } else if (nextStop.type === 'evaluation') {
+                    state = "EVALUATION";
+                    renderEvaluation();
+                }
+            } else {
+                state = "TRAIL";
+                renderTrail();
+            }
+        }
+
+        function triggerEvent(text, img) {
+            state = "EVENT_DISMISS";
+            setVisuals("IMAGE", img);
+            updateScreen(`\n\n\n\n     ${text}`, "Press ENTER to continue...");
+        }
+
+        // --- Fork 1 Logic ---
+        function renderForkMenu() {
+            setVisuals("WAGON");
+            let p1Days = daysRevealed ? "12 days" : "??? days";
+            let p2Days = daysRevealed ? " 4 days" : "??? days";
+            let p1Dest = destRevealed ? "Compliance Audit" : "???";
+            let p2Dest = destRevealed ? "Scope Creep Crossing" : "???";
+            let p1Pref = prefRevealed ? "Preferred (+10 Health)" : "???";
+            let p2Pref = prefRevealed ? "Unpopular (-15 Health)" : "???";
+
+            let html = `Fork in the Road\n\n`;
+            html += `You have reached a fork in the road.\n\n`;
+            html += `Path 1: ${p1Days} | Leads to: ${p1Dest} | Morale: ${p1Pref}\n`;
+            html += `Path 2: ${p2Days} | Leads to: ${p2Dest} | Morale: ${p2Pref}\n\n`;
+            
+            if (!daysRevealed) html += `1. Get Data (EPI) [-1 Tool] (Reveals Days)\n`;
+            if (!destRevealed) html += `2. Check Map (Strategic Planning) [-1 Map] (Reveals Destinations)\n`;
+            if (!prefRevealed) html += `3. Ask Travelers (PM/CQI) [-1 Supply] (Reveals Preferences)\n`;
+            
+            html += `4. Take Path 1\n`;
+            html += `5. Take Path 2\n`;
+            updateScreen(html, "What is your choice? ");
+        }
+
+        function handleForkMenu(input) {
+            if (input === "1" && !daysRevealed) {
+                if (tools > 0) { tools--; daysRevealed = true; oduServicesUsed++; renderForkMenu(); } 
+                else { alert("You do not have enough EPI Tools!"); }
+            } else if (input === "2" && !destRevealed) {
+                if (maps > 0) { maps--; destRevealed = true; oduServicesUsed++; renderForkMenu(); } 
+                else { alert("You do not have enough Strategic Planning Maps!"); }
+            } else if (input === "3" && !prefRevealed) {
+                if (supplies > 0) { supplies--; prefRevealed = true; oduServicesUsed++; renderForkMenu(); } 
+                else { alert("You do not have enough PM/CQI Supplies!"); }
+            } else if (input === "4") {
+                advanceTime(12);
+                programHealth = Math.min(100, programHealth + 10);
+                eventLog.push("Chose Fork Path 1 (+10 Health).");
+                trailMap.push({ type: 'audit', name: 'Compliance Audit', distance: 180 });
+                trailMap.push({ type: 'river', name: 'Scope Creep Crossing', distance: 240 });
+                trailMap.push({ type: 'fork2', name: 'Fork in the Road', distance: 300 });
+                currentMilestoneIndex++;
+                state = "TRAIL";
+                renderTrail();
+            } else if (input === "5") {
+                advanceTime(4);
+                programHealth -= 15;
+                eventLog.push("Chose Fork Path 2 (-15 Health).");
+                trailMap.push({ type: 'river', name: 'Scope Creep Crossing', distance: 180 });
+                trailMap.push({ type: 'fork2', name: 'Fork in the Road', distance: 240 });
+                currentMilestoneIndex++;
+                state = "TRAIL";
+                renderTrail();
+            }
+        }
+
+        // --- Compliance Audit Scenario ---
+        function renderAuditMenu() {
+            setVisuals("WAGON");
+            let html = `Compliance Audit HQ\n\n`;
+            html += `You have encountered a mandatory policy review board.\nThey are demanding excessive documentation to proceed.\n\n`;
+            html += `1. Wing It (50% chance to fail, High Penalty)\n`;
+            html += `2. Pay Consultant Fees (-$200 Budget) (Safe)\n`;
+            html += `3. Present EPI Data (-1 Tool) (Safe, +10 Health)\n`;
+            html += `4. Leverage PM/CQI process (-1 Supply) (Safe, +10 Health)\n`;
+            updateScreen(html, "What is your choice? ");
+        }
+
+        function handleAuditMenu(input) {
+            let successMessage = "";
+            if (input === "1") {
+                if (Math.random() > 0.5) {
+                    programHealth -= 25;
+                    advanceTime(5);
+                    successMessage = "The audit was a disaster! The team lost 5 days re-doing paperwork. (Lose 25 Health)";
+                    eventLog.push("Failed Compliance Audit (-25 Health).");
+                } else {
+                    successMessage = "You somehow passed the audit by the skin of your teeth without any preparation.";
+                    eventLog.push("Passed Audit by luck.");
+                }
+            } else if (input === "2") {
+                if (budget >= 200) {
+                    budget -= 200;
+                    successMessage = "You paid the external consultants to handle the audit. It was expensive but safe.";
+                    eventLog.push("Paid $200 for Audit consultants.");
+                } else {
+                    alert("Not enough budget!"); return;
+                }
+            } else if (input === "3") {
+                if (tools > 0) {
+                    tools--; oduServicesUsed++; programHealth = Math.min(100, programHealth + 10);
+                    successMessage = "The EPI Data proved your compliance instantly! (+10 Health)";
+                    eventLog.push("Used EPI Data to pass Audit.");
+                } else { alert("Not enough EPI tools!"); return; }
+            } else if (input === "4") {
+                if (supplies > 0) {
+                    supplies--; oduServicesUsed++; programHealth = Math.min(100, programHealth + 10);
+                    successMessage = "The PM/CQI process mapped the audit perfectly. Efficiency saves the day! (+10 Health)";
+                    eventLog.push("Used PM/CQI to pass Audit.");
+                } else { alert("Not enough PM/CQI supplies!"); return; }
+            } else { return; }
+            
+            currentMilestoneIndex++;
+            state = "EVENT_DISMISS";
+            updateScreen(`\n\n\n\n     ${successMessage}`, "Press ENTER to continue...");
+        }
+
+        // --- Fork 2 Logic ---
+        function renderFork2Menu() {
+            setVisuals("WAGON");
+            let p1Days = f2DaysRevealed ? "15 days" : "??? days";
+            let p2Days = f2DaysRevealed ? " 5 days" : "??? days";
+            let p1Dest = f2DestRevealed ? "Grantor Bonus" : "???";
+            let p2Dest = f2DestRevealed ? "Direct to Eval" : "???";
+            let p1Pref = f2PrefRevealed ? "Re-energizing (+20 Health)" : "???";
+            let p2Pref = f2PrefRevealed ? "Burnout risk (-10 Health)" : "???";
+
+            let html = `Fork in the Road\n\n`;
+            html += `You have reached another fork in the road.\n\n`;
+            html += `Path 1 (Deep Restructure): ${p1Days} | Leads to: ${p1Dest} | Morale: ${p1Pref}\n`;
+            html += `Path 2 (Minor Tweaks): ${p2Days} | Leads to: ${p2Dest} | Morale: ${p2Pref}\n\n`;
+            
+            if (!f2DaysRevealed) html += `1. Get Data (EPI) [-1 Tool] (Reveals Days)\n`;
+            if (!f2DestRevealed) html += `2. Check Map (Strategic Planning) [-1 Map] (Reveals Destinations)\n`;
+            if (!f2PrefRevealed) html += `3. Ask Travelers (PM/CQI) [-1 Supply] (Reveals Preferences)\n`;
+            
+            html += `4. Take Path 1\n`;
+            html += `5. Take Path 2\n`;
+            updateScreen(html, "What is your choice? ");
+        }
+
+        function handleFork2Menu(input) {
+            if (input === "1" && !f2DaysRevealed) {
+                if (tools > 0) { tools--; f2DaysRevealed = true; oduServicesUsed++; renderFork2Menu(); } 
+                else { alert("You do not have enough EPI Tools!"); }
+            } else if (input === "2" && !f2DestRevealed) {
+                if (maps > 0) { maps--; f2DestRevealed = true; oduServicesUsed++; renderFork2Menu(); } 
+                else { alert("You do not have enough Strategic Planning Maps!"); }
+            } else if (input === "3" && !f2PrefRevealed) {
+                if (supplies > 0) { supplies--; f2PrefRevealed = true; oduServicesUsed++; renderFork2Menu(); } 
+                else { alert("You do not have enough PM/CQI Supplies!"); }
+            } else if (input === "4") {
+                advanceTime(15);
+                programHealth = Math.min(100, programHealth + 20);
+                eventLog.push("Chose Fork Path 1 (+20 Health).");
+                let nextDist = trailMap[currentMilestoneIndex].distance;
+                trailMap.push({ type: 'grantor', name: 'Grantor Check-in', distance: nextDist + 60 });
+                trailMap.push({ type: 'evaluation', name: 'Program Evaluation', distance: nextDist + 120 });
+                currentMilestoneIndex++;
+                state = "TRAIL";
+                renderTrail();
+            } else if (input === "5") {
+                advanceTime(5);
+                programHealth -= 10;
+                eventLog.push("Chose Fork Path 2 (-10 Health).");
+                let nextDist = trailMap[currentMilestoneIndex].distance;
+                trailMap.push({ type: 'evaluation', name: 'Program Evaluation', distance: nextDist + 60 });
+                currentMilestoneIndex++;
+                state = "TRAIL";
+                renderTrail();
+            }
+        }
+
+
+        // --- River Logic ---
+        function renderRiver(riverName) {
+            setVisuals("WAGON");
+            
+            let rWidth = riverDataRevealed ? `${currentRiverWidth} ft` : "Unknown";
+            let rDepth = riverDataRevealed ? `${currentRiverDepth} ft` : "Unknown";
+            let altRoute = altRouteRevealed ? "Available (Adds 3 days, avoids hazard)" : "Unknown";
+
+            let html = `${riverName} crossing\n${month}, Day ${date}\n\n`;
+            html += `River width: ${rWidth}\n`;
+            html += `River depth: ${rDepth}\n`;
+            html += `Alternate Route: ${altRoute}\n\n`;
+            html += `You may:\n`;
+            
+            if (!riverDataRevealed) html += `1. Get Data (EPI) [-1 Tool] (Reveals width & depth)\n`;
+            if (!altRouteRevealed) html += `2. Check Map (Strategic Planning) [-1 Map] (Find alternate route)\n`;
+            
+            html += `3. Build a Raft (PM/CQI) [-1 Supply] (Safe crossing regardless of depth)\n`;
+            html += `4. Ford the river (High Risk if deep)\n`;
+            
+            if (altRouteRevealed) {
+                html += `5. Take alternate route (Safe, bypasses river entirely)\n`;
+            }
+            
+            updateScreen(html, "What is your choice? ");
+        }
+
+        function handleRiverCrossing(input) {
+            let successMessage = "";
+            let depthFloat = parseFloat(currentRiverDepth);
+            
+            if (input === "1" && !riverDataRevealed) {
+                if (tools > 0) { 
+                    tools--; riverDataRevealed = true; oduServicesUsed++; 
+                    renderRiver(trailMap[currentMilestoneIndex].name); 
+                } else { alert("You do not have enough EPI Tools!"); }
+                return;
+            } else if (input === "2" && !altRouteRevealed) {
+                if (maps > 0) { 
+                    maps--; altRouteRevealed = true; oduServicesUsed++; 
+                    renderRiver(trailMap[currentMilestoneIndex].name); 
+                } else { alert("You do not have enough Strategic Planning Maps!"); }
+                return;
+            } else if (input === "3") {
+                if (supplies > 0) {
+                    supplies--; oduServicesUsed++; programHealth = Math.min(100, programHealth + 10);
+                    successMessage = "You applied PM/CQI principles to build a robust raft. Efficient crossing! (+10 Health)";
+                    eventLog.push("Used PM/CQI Raft successfully.");
+                } else {
+                    successMessage = "No supplies to build a raft! You wade through the muck. Lose 15 Health.";
+                    programHealth -= 15;
+                    eventLog.push("Tried to raft without PM/CQI supplies (-15 Health).");
+                }
+            } else if (input === "4") {
+                if (depthFloat > 3.0) {
+                    programHealth -= 30;
+                    successMessage = `The river was ${depthFloat} ft deep! You blindly forded and the program bogged down in unexpected data issues. (Lose 30 Health)`;
+                    eventLog.push(`Failed to ford deep river (${depthFloat}ft) (-30 Health).`);
+                } else {
+                    successMessage = `The river was only ${depthFloat} ft deep. You forded it safely through sheer luck!`;
+                    eventLog.push("Safely forded shallow river.");
+                }
+            } else if (input === "5" && altRouteRevealed) {
+                advanceTime(3);
+                programHealth = Math.min(100, programHealth + 5);
+                successMessage = "You utilized the alternate route discovered by Strategic Planning. It cost you 3 extra days but you completely avoided the hazard! (+5 Health)";
+                eventLog.push("Took alternate river route safely (+5 Health).");
+            } else {
+                return; 
+            }
+
+            currentMilestoneIndex++; 
+            
+            if (programHealth <= 0) {
+                state = "GAME_OVER";
+                setVisuals("IMAGE", "image_cc0a39.png");
+                updateScreen(successMessage + "\n\n<span class='red'>The program has collapsed. Game Over.</span>", "Press ENTER to restart...");
+            } else {
+                state = "EVENT_DISMISS";
+                setVisuals("WAGON");
+                updateScreen(`\n\n\n\n     ${successMessage}`, "Press ENTER to continue...");
+            }
+        }
+
+        // --- Final Evaluation Screen ---
+        function renderEvaluation() {
+            setVisuals("IMAGE", "image_cc09ff.jpg"); 
+            let eventText = eventLog.length > 0 ? eventLog.slice(-5).join("\n* ") : "Nothing major happened.";
+            
+            let html = `     <span class="green">PROGRAM EVALUATION (${month.toUpperCase()})</span>\n\n`;
+            html += `Congratulations! You have successfully implemented the program.\n\n`;
+            html += `Final Program Health: ${programHealth}%\n`;
+            html += `Remaining Budget: $${budget}\n`;
+            html += `Total Distance: ${miles} miles\n\n`;
+            html += `<span class="cyan">ODU Services Utilized: ${oduServicesUsed}</span>\n`;
+            html += `(These proactive interventions secured your success)\n\n`;
+            html += `Recent Event Log:\n* ${eventText}\n`;
+
+            updateScreen(html, "Press ENTER to play again");
+        }
+
+        // --- Init ---
+        setVisuals("IMAGE", "image_f41202.jpg");
+        updateScreen(`\n\n\n\n\nA Simulation of Program Implementation\nand Organizational Development.\n\n\n\n`, "Press ENTER to begin");
+
+    </script>
+</body>
+</html>
